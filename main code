@@ -1,0 +1,544 @@
+import pygame
+import random
+import math
+import os
+
+# Initialize Pygame
+pygame.init()
+
+# Screen settings
+WIDTH, HEIGHT = 864, 800
+FPS = 60
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Duzz")
+clock = pygame.time.Clock()
+
+# Load assets
+background = pygame.image.load("background.png")
+background_y = 0
+background_scroll_speed = 1
+derek_img = pygame.transform.scale(pygame.image.load("derek.png"), (50, 50))
+truck_img = pygame.transform.scale(pygame.image.load("truck.png"), (100, 50))
+boss_img = pygame.transform.scale(pygame.image.load("boss.png"), (200, 100))
+angry_nikolas_img = pygame.transform.scale(pygame.image.load("angry_nikolas.png"), (60, 60))
+pants_img = pygame.transform.scale(pygame.image.load("pants.png"), (20, 20))
+maze_flash_img = pygame.image.load("maze_flash.png") # Add maze flash image
+# Colors
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+ORANGE = (255, 165, 0)
+BLACK = (0, 0, 0)
+
+# Font
+font = pygame.font.SysFont(None, 36)
+
+# High score handling
+if os.path.exists("highscore.txt"):
+    with open("highscore.txt", "r") as f:
+        high_score = int(f.read())
+else:
+    high_score = 0
+
+# Player settings
+player_size = 50
+player_rect = pygame.Rect(WIDTH // 2, HEIGHT - player_size - 20, player_size, player_size)
+player_speed = 10
+player_health = 5
+
+# Projectile settings
+player_projectiles = []
+enemy_projectiles = []
+projectile_speed = 15
+enemy_projectile_speed = 7
+
+# Powerups
+powerups = []
+powerup_timer = 0
+
+# Explosions
+explosions = []
+
+# Game progression
+score = 0
+level = 1
+nikolas_enemies = []
+pants_projectiles = []
+maze_flash_timer = 0
+
+# Boss settings
+boss = None
+boss_health = 100
+boss_max_health = 100
+boss_stage = 1
+boss_shoot_timer = 0
+boss_active = False
+shake_timer = 0
+
+# EnemyProjectile class
+class EnemyProjectile(pygame.Rect):
+    def __init__(self, x, y, w, h, direction=0):
+        super().__init__(x, y, w, h)
+        self.direction = direction
+
+# Truck class
+class Truck:
+    def __init__(self, x, y):
+        self.rect = pygame.Rect(x, y, 100, 50)
+        self.shoot_timer = random.randint(0, 60)
+        self.type = random.choice(["basic", "fast", "strong", "seeker"])
+        self.hp = 1 if self.type == "basic" else (1 if self.type == "fast" else (3 if self.type == "strong" else 2))
+
+    def move(self, speed):
+        if self.type == "fast":
+            self.rect.y += speed + 2
+        elif self.type == "seeker":
+            if self.rect.centerx < player_rect.centerx:
+                self.rect.x += 1.5
+            elif self.rect.centerx > player_rect.centerx:
+                self.rect.x -= 1.5
+            self.rect.y += speed
+        else:
+            self.rect.y += speed
+
+    def should_shoot(self, delay):
+        self.shoot_timer += 1
+        if self.shoot_timer >= delay:
+            self.shoot_timer = 0
+            return True
+        return False
+
+    def get_attack_pattern(self):
+        if self.type == "fast": return "burst"
+        elif self.type == "strong": return "spread"
+        elif self.type == "seeker": return "track"
+        return "straight"
+# class Angry Nikolas
+class AngryNikolas:
+    def __init__(self, x, y):
+            self.rect = pygame.Rect(x, y, 60, 60)
+            self.shoot_timer = 0
+
+    def move(self):
+            self.rect.y += 1
+
+    def shoot(self):
+            self.shoot_timer += 1
+            if self.shoot_timer >= 90:
+                self.shoot_timer = 0
+                pants = pygame.Rect(self.rect.centerx, self.rect.bottom, 20, 20)
+                pants_projectiles.append(pants)
+
+# Game state
+trucks = []
+truck_speed = 3
+truck_spawn_delay = 40
+truck_spawn_timer = 0
+enemy_shoot_delay = 140
+running = True
+game_state = "menu"
+endless_mode = False
+multishot_timer = 0
+boss_defeated_time = None
+maze_active = False
+maze_blocks = []
+
+while running:
+    clock.tick(FPS)
+    if boss_defeated_time and pygame.time.get_ticks() - boss_defeated_time >= 2000:
+        game_state = "victory"
+        boss_defeated_time = None
+    # Shake screen if needed
+    shake_x = random.randint(-5, 5) if shake_timer > 0 else 0
+    shake_y = random.randint(-5, 5) if shake_timer > 0 else 0
+    if shake_timer > 0:
+        shake_timer -= 1
+
+    # Draw background
+    screen.blit(background, (shake_x, shake_y))
+    background_y = (background_y + background_scroll_speed) % HEIGHT
+    screen.blit(background, (0, background_y - HEIGHT))
+    screen.blit(background, (0, background_y))
+
+    # Menus
+    if game_state == "menu":
+        title = font.render("DUZZ", True, WHITE)
+        prompt = font.render("Press SPACE to Start, E for Endless mode", True, WHITE)
+        highscore_text = font.render(f"High Score: {high_score}", True, WHITE)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 2 - 70))
+        screen.blit(prompt, (WIDTH // 2 - prompt.get_width() // 2, HEIGHT // 2))
+        screen.blit(highscore_text, (WIDTH // 2 - highscore_text.get_width() // 2, HEIGHT // 2 + 40))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    game_state = "playing"
+                    endless_mode = False
+                elif event.key == pygame.K_e:
+                    game_state = "playing"
+                    endless_mode = True
+        continue
+
+# Victory screen
+
+    if game_state == "victory":
+        screen.blit(background, (0, 0))
+        text1 = font.render("YOU WIN!", True, WHITE)
+        text2 = font.render("Press M for Menu or Q to Quit", True, WHITE)
+        screen.blit(text1, (WIDTH // 2 - text1.get_width() // 2, HEIGHT // 2 - 40))
+        screen.blit(text2, (WIDTH // 2 - text2.get_width() // 2, HEIGHT // 2 + 10))
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.USEREVENT:
+                game_state = "victory"
+                # Comment out or remove this line
+                # pygame.time.set_timer(pygame.USEREVENT, 2000)
+
+                # Instead, reset boss flags but DO NOT go to victory
+                boss_active = False
+                boss = None
+                boss_stage = 1
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_m:
+                    game_state = "menu"
+                elif event.key == pygame.K_q:
+                    running = False
+        continue
+
+# Game over screen
+
+    if game_state == "game_over":
+        if score > high_score:
+            high_score = score
+            with open("highscore.txt", "w") as f:
+                f.write(str(high_score))
+        title = font.render("GAME OVER", True, RED)
+        prompt = font.render("Press R to Restart or M for Menu", True, WHITE)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 2 - 50))
+        screen.blit(prompt, (WIDTH // 2 - prompt.get_width() // 2, HEIGHT // 2 + 10))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    trucks.clear()
+                    powerups.clear()
+                    enemy_projectiles.clear()
+                    player_projectiles.clear()
+                    level = 1
+                    score = 0
+                    player_health = 5
+                    truck_speed = 2
+                    boss_active = False
+                    game_state = "playing"
+                elif event.key == pygame.K_m:
+                    game_state = "menu"
+        continue
+
+    # Input
+    for event in pygame.event.get():
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            if multishot_timer > 0:
+                multishot_timer -= 1
+                # Angle-based multishot
+                for angle in [-45, 0, 45]:
+                    rad = math.radians(angle)
+                    dx = math.sin(rad) * projectile_speed
+                    dy = -math.cos(rad) * projectile_speed
+                    player_projectiles.append({"rect": pygame.Rect(player_rect.centerx - 5, player_rect.top, 10, 20), "dx": dx, "dy": dy})
+            else:
+                player_projectiles.append({"rect": pygame.Rect(player_rect.centerx - 5, player_rect.top, 10, 20), "dx": 0, "dy": -projectile_speed})
+
+
+    # Movement
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT] and player_rect.left > 0:
+        player_rect.x -= player_speed
+    if keys[pygame.K_RIGHT] and player_rect.right < WIDTH:
+        player_rect.x += player_speed
+    if keys[pygame.K_UP] and player_rect.top > 0:
+        player_rect.y -= player_speed
+    if keys[pygame.K_DOWN] and player_rect.bottom < HEIGHT:
+        player_rect.y += player_speed
+    if maze_active:
+        for wall in maze_blocks:
+            if player_rect.colliderect(wall):
+                if keys[pygame.K_LEFT]:
+                    player_rect.left = wall.right
+                if keys[pygame.K_RIGHT]:
+                    player_rect.right = wall.left
+                if keys[pygame.K_UP]:
+                    player_rect.top = wall.bottom
+                if keys[pygame.K_DOWN]:
+                    player_rect.bottom = wall.top
+
+
+    # Player projectiles
+    for proj in player_projectiles[:]:
+        proj["rect"].x += proj["dx"]
+        proj["rect"].y += proj["dy"]
+        if proj["rect"].bottom < 0 or proj["rect"].top > HEIGHT or proj["rect"].right < 0 or proj["rect"].left > WIDTH:
+            player_projectiles.remove(proj)
+
+
+    # Explosions
+    for explosion in explosions[:]:
+        pos, frame = explosion
+        if frame < 15:
+            pygame.draw.circle(screen, ORANGE, pos, frame * 3)
+            explosion[1] += 1
+        else:
+            explosions.remove(explosion)
+
+    # Powerups
+    powerup_timer += 1
+    if powerup_timer >= 300:
+        powerup_timer = 0
+        power_type = random.choice(["shield", "health", "multishot"])
+        powerup_rect = pygame.Rect(random.randint(50, WIDTH - 50), -30, 30, 30)
+        powerups.append((power_type, powerup_rect))
+    for power in powerups[:]:
+        power[1].y += 3
+        if power[1].top > HEIGHT:
+            powerups.remove(power)
+        elif player_rect.colliderect(power[1]):
+            if power[0] == "shield":
+                player_health += 1
+            elif power[0] == "health":
+                player_health = min(player_health + 2, 5)
+            elif power[0] == "multishot":
+                multishot_timer = FPS * 8 # 8 seconds of multishot
+            powerups.remove(power)
+
+    # Trucks
+    if not boss_active:
+        truck_spawn_timer += 1
+        #Spawn Angry Nikolas from level 15+
+        if level >= 15 and random.random() < 0.01:
+            nikolas_enemies.append(AngryNikolas(random.randint(0, WIDTH - 60), -60))
+        if truck_spawn_timer >= truck_spawn_delay:
+            truck_spawn_timer = 0
+            trucks.append(Truck(random.randint(0, WIDTH - 100), -50))
+        for truck in trucks[:]:
+            truck.move(truck_speed)
+            if truck.rect.top > HEIGHT:
+                trucks.remove(truck)
+                continue
+            if truck.should_shoot(enemy_shoot_delay):
+                pattern = truck.get_attack_pattern()
+                if pattern == "straight":
+                    enemy_projectiles.append(EnemyProjectile(truck.rect.centerx, truck.rect.bottom, 6, 20))
+                elif pattern == "burst":
+                    for dx in [-10, 0, 10]:
+                        enemy_projectiles.append(EnemyProjectile(truck.rect.centerx + dx, truck.rect.bottom, 6, 20))
+                elif pattern == "spread":
+                    for dx in [-15, 0, 15]:
+                        enemy_projectiles.append(EnemyProjectile(truck.rect.centerx + dx, truck.rect.bottom, 6, 20))
+                elif pattern == "track":
+                    dir = (player_rect.centerx - truck.rect.centerx) / 50
+                    enemy_projectiles.append(EnemyProjectile(truck.rect.centerx, truck.rect.bottom, 6, 20, dir))
+
+    # Boss logic
+    if level == 10 and not boss_active and boss is None and not endless_mode:
+        boss = pygame.Rect(WIDTH // 2 - 100, 50, 200, 100)
+        boss_entrance = True
+        boss_active = True
+        trucks.clear()
+        enemy_projectiles.clear()
+        boss_health = boss_max_health
+        boss_stage = 1
+        if boss_entrance:
+            boss.y += 3
+            if boss.y >= 50:
+                boss.y = 50
+                boss_entrance = False
+            
+        trucks.clear()
+        enemy_projectiles.clear()
+        boss_health = boss_max_health
+        boss_stage = 1
+
+    if boss_active and boss:
+        # Boss attacks
+        boss_shoot_timer += 1
+        # Boss side-to-side movement
+        boss.x += 3 * math.sin(pygame.time.get_ticks() / 500)
+        boss.clamp_ip(pygame.Rect(0, 0, WIDTH, HEIGHT // 2))  # Keeps boss inside top half
+
+        if boss_shoot_timer >= 90:
+            boss_shoot_timer = 0
+            shake_timer = 10
+            if boss_stage == 1:
+                for dx in range(-30, 31, 15):
+                    enemy_projectiles.append(EnemyProjectile(boss.centerx + dx, boss.bottom, 6, 20))
+            elif boss_stage == 2:
+                for angle in range(0, 360, 45):
+                    dir_x = math.cos(math.radians(angle)) * 5
+                    enemy_projectiles.append(EnemyProjectile(boss.centerx, boss.bottom, 6, 20, dir_x))
+            elif boss_stage == 3:
+                for dx in [-30, -15, 0, 15, 30]:
+                    dir = (player_rect.centerx - boss.centerx + dx) / 50
+                    enemy_projectiles.append(EnemyProjectile(boss.centerx + dx, boss.bottom, 6, 20, dir))
+                # Asteroid barrage
+                for _ in range(3):
+                    asteroid = EnemyProjectile(random.randint(boss.left, boss.right), boss.bottom, 20, 20, direction=0)
+                    asteroid.type = ("asteroid")  # Add a type flag
+                    enemy_projectiles.append(asteroid)
+
+        if boss_health <= boss_max_health * 0.66 and boss_stage == 1:
+            boss_stage = 2
+            shake_timer = 15
+        elif boss_health <= boss_max_health * 0.33 and boss_stage == 2:
+            boss_stage = 3
+            shake_timer = 20
+
+    # Enemy projectiles
+    for laser in enemy_projectiles[:]:
+        laser.x += laser.direction
+        laser.y += enemy_projectile_speed
+        if laser.top > HEIGHT or laser.left < 0 or laser.right > WIDTH:
+            enemy_projectiles.remove(laser)
+        elif player_rect.colliderect(laser):
+            enemy_projectiles.remove(laser)
+            player_health -= 1
+            if player_health <= 0:
+                game_state = "game_over"
+
+    # Collisions
+    for truck in trucks[:]:
+        for proj in player_projectiles[:]:
+            if truck.rect.colliderect(proj["rect"]):
+                player_projectiles.remove(proj)
+                truck.hp -= 1
+                if truck.hp <= 0:
+                    explosions.append([truck.rect.center, 0])
+                    trucks.remove(truck)
+                    score += 1
+                break
+
+if boss_active and boss:
+    for proj in player_projectiles[:]:
+        if boss.colliderect(proj["rect"]):
+            player_projectiles.remove(proj)
+            boss_health -= 1
+            if boss_health <= 0:
+                # Explosions
+                for _ in range(30):
+                    offset_x = random.randint(-50, 50)
+                    offset_y = random.randint(-50, 50)
+                    explosions.append([(boss.centerx + offset_x, boss.centery + offset_y), 0])
+
+                # Award points
+                score += 50
+
+                # Disable boss forever
+                boss_active = False
+                boss = None
+                boss_health = boss_max_health
+                boss_stage = 1
+
+                # Resume normal progression
+                trucks.clear()
+                enemy_projectiles.clear()
+                level += 1
+                truck_speed += 0.5
+                truck_spawn_delay = max(20, truck_spawn_delay - 5)
+
+
+
+
+    for truck in trucks:
+        if truck.rect.colliderect(player_rect):
+            game_state = "game_over"
+    if boss_active and boss and boss.colliderect(player_rect):
+        game_state = "game_over"
+
+    # Leveling
+    if score >= level * 10 and not boss_active:
+        level += 1
+        truck_speed += 0.5
+        truck_spawn_delay = max(30, truck_spawn_delay - 5)
+        trucks.clear()
+        enemy_projectiles.clear()
+
+        # Activate maze at level 20
+        if level == 20:
+            maze_active = True
+            maze_flash_timer = FPS *2
+            maze_blocks.clear()
+            grid_rows = 8
+            grid_cols = 6
+            cell_width = WIDTH // grid_cols
+            cell_height = (HEIGHT - 200) // grid_rows
+
+            for row in range(grid_rows):
+                for col in range(grid_cols):
+                    if random.random() < 0.7:  # 70% chance to place a block
+                        block_x = col * cell_width + 10
+                        block_y = row * cell_height + 100
+                        maze_blocks.append(pygame.Rect(block_x, block_y, cell_width - 20, cell_height - 20))
+        else:
+            maze_active = False
+            maze_blocks.clear()
+
+    # Draw
+    screen.blit(derek_img, player_rect)
+    for truck in trucks:
+        screen.blit(truck_img, truck.rect.topleft)
+        if truck.type == "fast":
+            color = (0, 255, 255)
+        elif truck.type == "strong":
+            color = (255, 0, 255)
+        elif truck.type == "seeker":
+            color = (255, 255, 0)
+        else:
+            color = (255, 255, 255)
+        pygame.draw.rect(screen, color, truck.rect, 2)
+    if maze_active:
+        for block in maze_blocks:
+            pygame.draw.rect(screen, (100, 100, 100), block) # Draw maze blocks
+
+    for proj in player_projectiles:
+        pygame.draw.rect(screen, WHITE, proj["rect"]) 
+    for laser in enemy_projectiles:
+        pygame.draw.rect(screen, RED, laser)
+    for pants in pants_projectiles[:]:
+        pants.y += 6
+        screen.blit(pants_img, pants)
+
+        if pants.colliderect(player_rect):
+            player_health -= 1
+            pants_projectiles.remove(pants)
+        elif pants.top > HEIGHT:
+            pants_projectiles.remove(pants)
+    for power in powerups:
+        color = (0, 200, 255) if power[0] == "shield" else (0, 255, 0)
+        pygame.draw.ellipse(screen, color, power[1])
+
+    if boss_active and boss:
+        screen.blit(boss_img, boss.topleft)
+        pygame.draw.rect(screen, RED, (WIDTH//2 - 100, 10, 200, 20))
+        pygame.draw.rect(screen, WHITE, (WIDTH//2 - 100, 10, int(200 * (boss_health / boss_max_health)), 20))
+        pygame.draw.rect(screen, BLACK, (WIDTH//2 - 100, 10, 200, 20), 2)
+    stage_text = font.render(f"Boss Stage: {boss_stage}", True, WHITE)
+    screen.blit(stage_text, (WIDTH//2 - stage_text.get_width()//2, 40))
+
+    screen.blit(font.render(f"Level: {level}", True, WHITE), (10, 10))
+    screen.blit(font.render(f"Score: {score}", True, WHITE), (10, 50))
+    screen.blit(font.render(f"Health: {player_health}", True, WHITE), (10, 90))
+    if boss_active and not boss_entrance:
+        screen.blit(font.render(f"Boss Stage: {boss_stage}", True, WHITE), (10, 130))
+    if endless_mode:
+        screen.blit(font.render("Endless Mode", True, WHITE), (WIDTH - 200, 10))
+    if maze_flash_timer > 0:
+        maze_flash_timer -= 1
+        screen.blit(maze_flash_img, (WIDTH // 2 - maze_flash_img.get_width() // 2, HEIGHT // 2 - maze_flash_img.get_height() // 2))
+
+    pygame.display.flip()
+ 
+pygame.quit()
